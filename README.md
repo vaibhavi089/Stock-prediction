@@ -13,3 +13,8 @@ This app predicts the next-day closing price of any stock using an LSTM neural n
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+### Demo
+
+![App Screenshot](demo.png)
