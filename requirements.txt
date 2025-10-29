@@ -4,4 +4,4 @@ streamlit
 matplotlib
 yfinance
 tensorflow
-sklearn
+scikit-learn
