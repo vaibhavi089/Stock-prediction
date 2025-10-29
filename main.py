@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from yahooquery import Ticker
+
 
 # Streamlit setup
 st.set_page_config(page_title="Stock Price Prediction", page_icon=":chart_with_upwards_trend:", layout="centered")
