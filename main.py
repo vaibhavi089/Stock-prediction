@@ -22,22 +22,16 @@ train_button = st.sidebar.button("Train Model")
 # -------- Data Loading -------- #
 @st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
-    """Fetch historical stock data using yahooquery."""
     try:
-        stock = Ticker(ticker)
-        hist = stock.history(start=start, end=end)
-        if hist.empty or "close" not in hist.columns:
-            st.warning(f"⚠️ No data found for {ticker}. Please check the symbol or date range.")
-            return pd.DataFrame()
-
-        # Reset index & prepare
-        hist = hist.reset_index()
-        data = hist[["date", "close"]].rename(columns={"date": "Date", "close": "Close"})
-        data.set_index("Date", inplace=True)
-        return data
+        data = yf.download(ticker, start=start, end=end, progress=False)
+        if data.empty:
+            st.error("⚠️ No data found for this ticker. It may be delisted or invalid.")
+            return pd.DataFrame({"Close": []})
+        return data[["Close"]]
     except Exception as e:
-        st.error(f"❌ Error fetching data for {ticker}: {e}")
-        return pd.DataFrame()
+        st.error(f"❌ Error fetching data: {e}")
+        return pd.DataFrame({"Close": []})
+
 
 
 data = load_data(ticker, start_date, end_date)
