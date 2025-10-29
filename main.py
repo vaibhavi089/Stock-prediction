@@ -6,6 +6,8 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 import yfinance as yf
+import time
+
 
 st.set_page_config(page_title="Stock Price Prediction", page_icon=":chart_with_upwards_trend:", layout="centered")
 st.markdown("### Predict future stock prices using an LSTM Neural Network")
@@ -18,14 +20,35 @@ end_date = st.sidebar.date_input("End date", pd.to_datetime("today"))
 train_button = st.sidebar.button("Train Model")
 
 
-def load_data(ticker, start, end):
-    data = yf.download(ticker, start=start, end=end)
-    data = data[['Close']]
-    return data
+def load_data(ticker, start, end, retries=3, delay=2):
+    """Download stock data safely with retries and error handling."""
+    for attempt in range(retries):
+        try:
+            data = yf.download(ticker, start=start, end=end, progress=False)
+            
+            if data is not None and not data.empty:
+                return data[['Close']]
+            
+            # If data is empty, wait and retry
+            st.warning(f"⚠️ Attempt {attempt+1}: No data for '{ticker}'. Retrying...")
+            time.sleep(delay)
+        
+        except Exception as e:
+            st.warning(f"⚠️ Attempt {attempt+1}: Error downloading {ticker}: {e}")
+            time.sleep(delay)
+    
+    # If all attempts failed
+    st.error(f"❌ Failed to load data for '{ticker}'. Please check the symbol or try again later.")
+    return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
+
+if data.empty:
+    st.stop()
+
 st.subheader(f"{ticker} Stock Closing Prices")
 st.line_chart(data['Close'])
+
 
 
 def prepare_data(data, seq_len=60):
