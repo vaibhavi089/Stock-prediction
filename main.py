@@ -6,10 +6,11 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 import yfinance as yf
+import time
 
 # ---------------- Streamlit Setup ----------------
 st.set_page_config(page_title="Stock Price Prediction", page_icon=":chart_with_upwards_trend:", layout="centered")
-st.markdown("### 📈 Predict future stock prices using an LSTM Neural Network")
+st.markdown("### 📈 Predict Future Stock Prices using an LSTM Neural Network")
 
 # ---------------- Sidebar ----------------
 st.sidebar.header("Settings")
@@ -19,15 +20,32 @@ end_date = st.sidebar.date_input("End date", pd.to_datetime("today"))
 train_button = st.sidebar.button("Train Model")
 
 # ---------------- Data Loading ----------------
-def load_data(ticker, start, end):
-    try:
-        data = yf.download(ticker, start=start, end=end)
-        if data.empty:
-            return pd.DataFrame()  # Return empty DataFrame if no data found
-        return data[['Close']]
-    except Exception as e:
-        st.error(f"❌ Error fetching data: {e}")
-        return pd.DataFrame()
+@st.cache_data(show_spinner=False)
+def load_data(ticker, start, end, retries=3):
+    """
+    Safely downloads stock data with retries and fallback handling.
+    """
+    for attempt in range(retries):
+        try:
+            data = yf.download(
+                ticker,
+                start=start,
+                end=end,
+                progress=False,
+                threads=False,
+                auto_adjust=False,
+                prepost=True,
+                repair=True
+            )
+            if data.empty:
+                continue
+            return data[['Close']]
+        except Exception as e:
+            time.sleep(2)
+            if attempt == retries - 1:
+                st.error(f"❌ Failed to fetch data for {ticker}: {e}")
+                return pd.DataFrame()
+    return pd.DataFrame()
 
 data = load_data(ticker, start_date, end_date)
 
@@ -43,7 +61,7 @@ st.line_chart(data['Close'])
 # ---------------- Data Preparation ----------------
 def prepare_data(data, seq_len=60):
     if len(data) < seq_len:
-        st.error(f"❌ Not enough data to train. Need at least {seq_len} days of data.")
+        st.error(f"❌ Not enough data to train (need at least {seq_len} days).")
         st.stop()
 
     scaler = MinMaxScaler(feature_range=(0, 1))
@@ -74,10 +92,10 @@ def train_lstm_model(x_train, y_train, x_test, y_test):
 # ---------------- Training + Prediction ----------------
 if train_button:
     if len(data) < 100:
-        st.warning("⚠️ Please select a longer date range (at least a few months of data).")
+        st.warning("⚠️ Please select a longer date range (at least a few months).")
         st.stop()
 
-    st.info("⏳ Training LSTM model... Please wait.")
+    st.info("⏳ Training the LSTM model... please wait.")
 
     x, y, scaler = prepare_data(data.values)
     split = int(0.8 * len(x))
@@ -86,7 +104,7 @@ if train_button:
 
     model, predictions = train_lstm_model(x_train, y_train, x_test, y_test)
 
-    # Convert back to original price scale
+    # Convert predictions back to original scale
     predictions = scaler.inverse_transform(predictions)
     actual = scaler.inverse_transform(y_test.reshape(-1, 1))
 
@@ -101,12 +119,12 @@ if train_button:
     st.pyplot(fig)
 
     # ---------------- Next Day Prediction ----------------
-    last_60 = data[-60:].values
-    if len(last_60) < 60:
-        st.warning("⚠️ Not enough recent data to predict the next day price.")
-    else:
+    if len(data) >= 60:
+        last_60 = data[-60:].values
         last_60_scaled = scaler.transform(last_60)
         x_input = np.reshape(last_60_scaled, (1, 60, 1))
         next_day_pred = model.predict(x_input)
         next_day_price = scaler.inverse_transform(next_day_pred)[0][0]
         st.success(f"📅 Predicted next day closing price: **${next_day_price:.2f}**")
+    else:
+        st.warning("⚠️ Not enough recent data to predict the next day price.")
