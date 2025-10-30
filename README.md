@@ -28,4 +28,8 @@ streamlit run app.py
 
 ### Demo
 
-![App Screenshot](demo.png)
+![App Screenshot](demo1.png)
+![App Screenshot](demo2.png)
+![App Screenshot](demo3.png)
+![App Screenshot](demo4.png)
+
