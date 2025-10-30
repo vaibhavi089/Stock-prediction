@@ -1,4 +1,4 @@
-#  Stock Price Prediction (LSTM + Streamlit)
+#  Stock Price Prediction 
 
 This project implements a sophisticated Long Short-Term Memory(LSTM) neural network with attention mechanism to predict stock prices with exceptional accuracy. The model incorporates multiple technical indicator to deliver reliable financial forecasts. 
 
