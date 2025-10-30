@@ -1,111 +1,184 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import RobustScaler
 import yfinance as yf
-import time
+import warnings
+warnings.filterwarnings('ignore')
 
 
-st.set_page_config(page_title="Stock Price Prediction", page_icon=":chart_with_upwards_trend:", layout="centered")
-st.markdown("### Predict future stock prices using an LSTM Neural Network")
+st.set_page_config(page_title="Stock Price Predictor", layout="wide")
+st.title("📈 LSTM Stock Price Predictor")
 
 
-st.sidebar.header("Settings")
-ticker = st.sidebar.text_input("Enter stock symbol (e.g. AAPL, TSLA)", "AAPL")
-start_date = st.sidebar.date_input("Start date", pd.to_datetime("2010-01-01"))
-end_date = st.sidebar.date_input("End date", pd.to_datetime("today"))
-train_button = st.sidebar.button("Train Model")
+ticker = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL, TSLA, INFY.NS)", "AAPL")
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2015-01-01"))
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-12-31"))
+train_button = st.sidebar.button("Train & Predict")
 
 
-def load_data(ticker, start, end, retries=3, delay=2):
-    """Download stock data safely with retries and error handling."""
-    for attempt in range(retries):
-        try:
-            data = yf.download(ticker, start=start, end=end, progress=False)
-            
-            if data is not None and not data.empty:
-                return data[['Close']]
-            
-            # If data is empty, wait and retry
-            st.warning(f"⚠️ Attempt {attempt+1}: No data for '{ticker}'. Retrying...")
-            time.sleep(delay)
-        
-        except Exception as e:
-            st.warning(f"⚠️ Attempt {attempt+1}: Error downloading {ticker}: {e}")
-            time.sleep(delay)
-    
-    # If all attempts failed
-    st.error(f"❌ Failed to load data for '{ticker}'. Please check the symbol or try again later.")
-    return pd.DataFrame()
-
-data = load_data(ticker, start_date, end_date)
-
-if data.empty:
-    st.stop()
-
-st.subheader(f"{ticker} Stock Closing Prices")
-st.line_chart(data['Close'])
-
-
-
-def prepare_data(data, seq_len=60):
-    scaler = MinMaxScaler(feature_range=(0,1))
-    scaled = scaler.fit_transform(data)
-
-    x, y = [], []
-    for i in range(seq_len, len(scaled)):
-        x.append(scaled[i-seq_len:i, 0])
-        y.append(scaled[i, 0])
-    x, y = np.array(x), np.array(y)
-    x = np.reshape(x, (x.shape[0], x.shape[1], 1))
-    return x, y, scaler
-
-
-@st.cache_resource
-def train_lstm_model(x_train, y_train, x_test, y_test):
-    model = Sequential([
-        LSTM(50, return_sequences=True, input_shape=(x_train.shape[1], 1)),
-        LSTM(50, return_sequences=False),
-        Dense(25),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(x_train, y_train, epochs=10, batch_size=32, verbose=0)
-
-    predictions = model.predict(x_test)
-    return model, predictions
-
+@st.cache_data
+def load_stock_data(ticker, start, end):
+    return yf.download(ticker, start=start, end=end)
 
 if train_button:
-    st.write("⏳ Training or loading cached LSTM Model...")
+    df = load_stock_data(ticker, start_date, end_date)
+    st.subheader(f"📊 Historical Data for {ticker}")
+    st.write(df.tail())
 
-    x, y, scaler = prepare_data(data.values)
-    split = int(0.8 * len(x))
-    x_train, x_test = x[:split], x[split:]
-    y_train, y_test = y[:split], y[split:]
+    
+    df['Daily_Return'] = df['Close'].pct_change()
+    df['HL_Pct'] = (df['High'] - df['Low']) / df['Close'] * 100.0
+    df['OC_Pct'] = (df['Close'] - df['Open']) / df['Open'] * 100.0
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+    df['Volatility'] = df['Daily_Return'].rolling(window=20).std()
+    df.dropna(inplace=True)
 
-    model, predictions = train_lstm_model(x_train, y_train, x_test, y_test)
+    
 
-    predictions = scaler.inverse_transform(predictions)
-    actual = scaler.inverse_transform(y_test.reshape(-1, 1))
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(actual, label='Actual')
-    ax.plot(predictions, label='Predicted')
-    ax.set_title(f"{ticker} Stock Price Prediction")
-    ax.set_xlabel("Days")
-    ax.set_ylabel("Price (USD)")
+    st.subheader("📉 Stock Closing Price & Moving Averages")
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df.index, df['Close'], label='Close', color='blue')
+    ax.plot(df.index, df['MA20'], label='MA20', color='orange', linestyle='--')
+    ax.plot(df.index, df['MA50'], label='MA50', color='green', linestyle='--')
     ax.legend()
+    ax.set_title(f"{ticker} Price Trend")
     st.pyplot(fig)
 
     
-    last_60 = data[-60:].values
-    last_60 = scaler.transform(last_60)
-    x_input = np.reshape(last_60, (1, 60, 1))
-    next_day_pred = model.predict(x_input)
-    next_day_price = scaler.inverse_transform(next_day_pred)[0][0]
+    class StockDataset(Dataset):
+        def __init__(self, data, seq_len=60):
+            self.seq_len = seq_len
+            self.features = ['Close', 'Volume', 'Daily_Return', 'HL_Pct', 'OC_Pct', 'MA20', 'Volatility']
+            self.data = data[self.features].values
+            self.target = data['Close'].values.reshape(-1, 1)
+            self.scaler = RobustScaler()
+            self.data_scaled = self.scaler.fit_transform(self.data)
+            self.target_scaled = self.scaler.fit_transform(self.target)
 
-    st.success(f"📅 Predicted next day closing price: **${next_day_price:.2f}**")
+        def __len__(self):
+            return len(self.data_scaled) - self.seq_len
+
+        def __getitem__(self, idx):
+            X = self.data_scaled[idx:idx+self.seq_len]
+            y = self.target_scaled[idx+self.seq_len]
+            return torch.FloatTensor(X), torch.FloatTensor(y)
+
+    dataset = StockDataset(df)
+    train_size = int(0.8 * len(dataset))
+    train_data, test_data = torch.utils.data.random_split(dataset, [train_size, len(dataset)-train_size])
+    train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=32, shuffle=False)
+
+    
+
+    class StockLSTM(nn.Module):
+        def __init__(self, input_size, hidden_size=64, num_layers=2, dropout=0.3):
+            super(StockLSTM, self).__init__()
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
+                                batch_first=True, dropout=dropout, bidirectional=True)
+            self.fc = nn.Sequential(
+                nn.Linear(hidden_size*2, 64),
+                nn.ReLU(),
+                nn.Linear(64, 1)
+            )
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            return self.fc(out[:, -1, :])
+
+    
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = StockLSTM(input_size=7).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    epochs = 15
+
+    st.subheader("🚀 Training Progress")
+    progress = st.progress(0)
+    losses = []
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        for X, y in train_loader:
+            X, y = X.to(device), y.to(device)
+            optimizer.zero_grad()
+            pred = model(X)
+            loss = criterion(pred, y)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        losses.append(total_loss / len(train_loader))
+        progress.progress((epoch + 1) / epochs)
+
+    st.success("✅ Model training completed!")
+
+    
+
+    fig2, ax2 = plt.subplots()
+    ax2.plot(losses, color='purple')
+    ax2.set_title("Training Loss")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("MSE Loss")
+    st.pyplot(fig2)
+
+    
+
+    def predict_future_prices(model, dataset, days=30):
+        model.eval()
+        future_predictions = []
+
+        last_idx = len(dataset) - 1
+        last_sequence, _ = dataset[last_idx]
+        current_sequence = last_sequence.clone().detach().to(device)
+
+        with torch.no_grad():
+            for _ in range(days):
+                input_seq = current_sequence.unsqueeze(0)
+                prediction = model(input_seq)
+                future_predictions.append(prediction.item())
+
+                new_row = current_sequence[-1].clone()
+                new_row[0] = prediction.item()
+                current_sequence = torch.cat([current_sequence[1:], new_row.unsqueeze(0)])
+
+        return np.array(future_predictions)
+
+    st.subheader("🔮 Predicting Future Stock Prices (Next 30 Days)")
+    future_predictions = predict_future_prices(model, dataset, days=30)
+    future_predictions_original = dataset.scaler.inverse_transform(
+        future_predictions.reshape(-1, 1)).flatten()
+
+    
+
+    def create_static_future_plot(actual_prices, future_predictions):
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(range(len(actual_prices)), actual_prices, 'b-', label='Historical Prices')
+        ax.plot(range(len(actual_prices), len(actual_prices) + len(future_predictions)),
+                future_predictions, 'r--', label='Future Predictions')
+        ax.axvline(len(actual_prices) - 1, color='gray', linestyle=':', alpha=0.7)
+        ax.legend()
+        ax.set_title("Stock Price Forecast: Historical vs Future (Next 30 Days)")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Price ($)")
+        ax.grid(True)
+        return fig
+
+    actual_prices = df['Close'].values[-200:]  # 
+    fig3 = create_static_future_plot(actual_prices, future_predictions_original)
+    st.pyplot(fig3)
+
+    ##forecast
+    st.subheader("📅 Next 30 Days Forecast (in $)")
+    forecast_df = pd.DataFrame({
+        "Day": np.arange(1, 31),
+        "Predicted Price": np.round(future_predictions_original, 2)
+    })
+    st.dataframe(forecast_df, use_container_width=True)
